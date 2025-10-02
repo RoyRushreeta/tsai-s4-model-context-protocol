@@ -409,7 +409,7 @@ def debug_error(error: str) -> list[base.Message]:
 
 @mcp.tool()
 async def send_email(to: str, subject: str, body: str) -> dict:
-    """Send an email using the SendGrid API.
+    """Send an email using Gmail SMTP.
 
     Parameters:
       to: Recipient email address
@@ -417,59 +417,59 @@ async def send_email(to: str, subject: str, body: str) -> dict:
       body: Plain text body content (will also be wrapped in minimal HTML)
 
     Behavior:
-      - Loads SENDGRID_API_KEY from environment (.env)
-      - Uses optional SENDGRID_FROM_EMAIL or FROM_EMAIL as the sender; if absent, falls back to recipient
-      - Sends both plain text and simple HTML version
-      - Returns a dict with status, status_code (if available), and any error message
+      - Loads GMAIL_ADDRESS and GMAIL_APP_PASSWORD from environment (.env)
+      - Uses Gmail's SMTP server (smtp.gmail.com:587) with TLS
+      - Sends both plain text and HTML version
+      - Returns a dict with status and any error message
     """
     try:
-        from sendgrid import SendGridAPIClient
-        from sendgrid.helpers.mail import Mail
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
     except Exception as e:
-        return {"status": "error", "error": f"Failed to import sendgrid library: {e}"}
+        return {"status": "error", "error": f"Failed to import email libraries: {e}"}
 
-    # Get and clean API key (remove quotes and spaces)
-    api_key = os.getenv("SENDGRID_API_KEY", "").strip().strip('"').strip("'")
-    if not api_key:
-        return {"status": "error", "error": "SENDGRID_API_KEY not set in environment"}
-
-    # Get and clean from email
-    from_email = (
-        os.getenv("SENDGRID_FROM_EMAIL", "").strip().strip('"').strip("'")
-        or os.getenv("FROM_EMAIL", "").strip().strip('"').strip("'")
-        or to  # Fallback to recipient (must be verified)
-    )
+    # Get and clean Gmail credentials (remove quotes and spaces)
+    gmail_address = os.getenv("GMAIL_ADDRESS", "").strip().strip('"').strip("'")
+    gmail_app_password = os.getenv("GMAIL_APP_PASSWORD", "").strip().strip('"').strip("'")
     
-    if not from_email or "@" not in from_email:
-        return {"status": "error", "error": f"Invalid from_email: {from_email}"}
+    if not gmail_address:
+        return {"status": "error", "error": "GMAIL_ADDRESS not set in environment"}
+    if not gmail_app_password:
+        return {"status": "error", "error": "GMAIL_APP_PASSWORD not set in environment"}
+    
+    if "@" not in gmail_address:
+        return {"status": "error", "error": f"Invalid GMAIL_ADDRESS: {gmail_address}"}
 
-    print(f"DEBUG send_email: from={from_email}, to={to}, api_key={api_key[:10]}...")
-
-    # Construct the email
-    message = Mail(
-        from_email=from_email,
-        to_emails=to,
-        subject=subject,
-        plain_text_content=body,
-        html_content=f"<pre style='font-family: monospace'>{body}</pre>",
-    )
+    print(f"DEBUG send_email: from={gmail_address}, to={to}")
 
     try:
-        sg = SendGridAPIClient(api_key)
-        response = sg.send(message)
+        # Create message
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = gmail_address
+        msg['To'] = to
+
+        # Add plain text and HTML versions
+        part1 = MIMEText(body, 'plain')
+        part2 = MIMEText(f"<pre style='font-family: monospace'>{body}</pre>", 'html')
+        msg.attach(part1)
+        msg.attach(part2)
+
+        # Connect to Gmail SMTP server
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()  # Secure the connection
+            server.login(gmail_address, gmail_app_password)
+            server.send_message(msg)
+        
         return {
             "status": "success",
-            "status_code": getattr(response, 'status_code', None),
-            "message": f"Email sent to {to}"
+            "message": f"Email sent to {to} from {gmail_address}"
         }
     except Exception as e:
-        # Provide more detailed error information
+        # Provide detailed error information
         error_msg = str(e)
-        if hasattr(e, 'body'):
-            error_msg += f" | Body: {e.body}"
-        if hasattr(e, 'status_code'):
-            error_msg += f" | Status: {e.status_code}"
-        return {"status": "error", "error": error_msg, "from": from_email, "to": to}
+        return {"status": "error", "error": error_msg, "from": gmail_address, "to": to}
 
 if __name__ == "__main__":
     # Check if running with mcp dev command
